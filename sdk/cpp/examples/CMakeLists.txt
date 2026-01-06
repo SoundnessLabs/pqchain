@@ -44,3 +44,9 @@ target_link_libraries(eddsa ligetron)
 
 add_executable(eddsa_batch EdDSA/eddsa_batch_verify_no_args.cpp)
 target_link_libraries(eddsa_batch ligetron)
+
+
+# PQChain -- This is added recently
+# ------------------------------------------------------------
+add_executable(pqchain PQChain/pqchain.cpp)
+target_link_libraries(pqchain ligetron)
