@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://www.apache.org/licenses/LICENSE-2.0"><img src="https://img.shields.io/badge/license-Apache_2.0-blue" alt="License"></a>
+  <a href="#"><img src="https://img.shields.io/badge/status-Work_In_Progress-yellow" alt="Status: WIP"></a>
   <a href="#"><img src="https://img.shields.io/badge/build-success-green" alt="Build"></a>
   <a href="https://github.com/SoundnessLabs"><img src="https://img.shields.io/badge/GitHub-SoundnessLabs-181717?logo=github" alt="GitHub"></a>
   <a href="https://soundness.xyz"><img src="https://img.shields.io/badge/Website-soundness.xyz-purple" alt="Website"></a>
@@ -15,7 +16,11 @@
 
 **By [Soundness Labs](https://soundness.xyz)**
 
+> **Work in Progress**: This project is under active development and is not yet production-ready. APIs, circuit design, and implementation details may change without notice. Use at your own risk and do not rely on this for securing real assets until a stable release is announced.
+
 PQChain is an open-source implementation of a post-quantum secure zero-knowledge proof system for EdDSA key ownership. It enables users to prove ownership of Ed25519 keys through their deterministic seed, facilitating seamless post-quantum migration for modern blockchains without changing addresses.
+
+**Research Paper**: This implementation is based on our research paper ["Post-Quantum Readiness in EdDSA Chains"](https://eprint.iacr.org/2025/1368.pdf) accepted to Financial Crypto Conference 2026.
 
 ---
 
@@ -30,7 +35,8 @@ PQChain is an open-source implementation of a post-quantum secure zero-knowledge
 - [Running the Prover and Verifier](#running-the-prover-and-verifier)
 - [Circuit Arguments](#circuit-arguments)
 - [Performance Benchmarks](#performance-benchmarks)
-- [Live Demo](#live-demo)
+- [Troubleshooting](#troubleshooting)
+- [Acknowledgements](#Acknowledgements)
 - [License](#license)
 - [About Soundness Labs](#about-soundness-labs)
 
@@ -41,6 +47,8 @@ PQChain is an open-source implementation of a post-quantum secure zero-knowledge
 Quantum computers pose an existential threat to elliptic curve cryptography. Shor's algorithm can recover private keys from public keys in polynomial time, putting billions of dollars in blockchain assets at risk. EdDSA-based chains (Sui, Solana, Near, and others) have a structural advantage: keys are deterministically derived from a seed via RFC 8032, enabling zero-knowledge proofs of ownership without exposing the private scalar.
 
 PQChain leverages this property to create a backward-compatible post-quantum migration path. Users can prove they control an EdDSA keypair by demonstrating knowledge of the underlying seed—all without revealing the seed itself or changing their on-chain address.
+
+For a detailed treatment of the cryptographic foundations and security analysis, see our [research paper](https://eprint.iacr.org/2025/1368.pdf).
 
 This implementation builds upon the [Ligetron zkVM](https://github.com/ligeroinc/ligero-prover) (v1.1.0), extending it with:
 - Complete Ed25519 curve arithmetic via non-native field emulation
@@ -62,8 +70,7 @@ Date:   Sun Oct 5 04:00:15 2025 +0000
 ### The Post-Quantum Imperative
 
 - **Shor's Algorithm**: Can break ECDSA/EdDSA in polynomial time once large-scale quantum computers exist
-- **Harvest Now, Decrypt Later**: Adversaries may already be collecting encrypted data and signed transactions for future decryption
-- **Regulatory Pressure**: NIST mandates post-quantum migration for critical systems by 2035; many enterprises need solutions now
+- **Regulatory Pressure**: NIST mandates post-quantum migration for critical systems by 2030; many enterprises need solutions now
 
 ### Why Ligetron?
 
@@ -76,11 +83,13 @@ We selected the Ligetron zkVM as our proving backend for several reasons:
 | **Client-Side Proving** | Compiles to WebAssembly for browser-based proof generation via WebGPU |
 | **No Trusted Setup** | Transparent setup eliminates trusted third parties |
 
+> **Note**: We are actively exploring additional proving systems optimized for more compact proof sizes, efficient on-chain verification, and customized circuit architectures. Future releases may support multiple backends depending on deployment requirements.
+
 ### The Non-Native Arithmetic Challenge
 
-Ed25519 operates over a prime field (2²⁵⁵ - 19) that lacks sufficient roots of unity for efficient FFT operations. Ligetron requires FFT-friendly fields with smooth-order multiplicative subgroups (specifically BN254). 
+Ed25519 operates over a prime field (2^255 - 19) that lacks sufficient roots of unity for efficient FFT operations. Ligetron requires FFT-friendly fields with smooth-order multiplicative subgroups (specifically BN254). 
 
-**Our Solution**: We implement non-native field arithmetic, decomposing Ed25519 field elements into three 85-bit limbs that fit within the BN254 scalar field. This enables emulated arithmetic with careful carry and overflow handling, at the cost of increased constraint count (~70% of our circuit).
+**Our Solution**: We implement non-native field arithmetic, decomposing Ed25519 field elements into three 85-bit limbs that fit within the BN254 scalar field. This enables emulated arithmetic with careful carry and overflow handling, at the cost of increased constraint count (around 70% of our circuit).
 
 ---
 
@@ -115,12 +124,12 @@ This enables a user to authorize post-quantum transactions or key rotations by p
 Ed25519 field elements (255 bits) are represented as vectors of three BN254 field elements:
 
 ```
-element = limbs[2] + limbs[1] × 2⁸⁵ + limbs[0] × 2¹⁷⁰
+element = limbs[2] + limbs[1] × 2^85 + limbs[0] × 2^170
 ```
 
 Key implementation details:
 - **Lazy Reduction**: Additions accumulate without immediate modular reduction
-- **Modular Folding**: Multiplication uses 2²⁵⁵ ≡ 19 (mod p) for efficient reduction
+- **Modular Folding**: Multiplication uses 2^255 ≡ 19 (mod p) for efficient reduction
 - **Extended Edwards Coordinates**: Point operations use (X, Y, Z, T) representation for complete addition formulas
 
 ---
@@ -146,13 +155,13 @@ sdk/cpp/
 
 ### File Descriptions
 
-| File | Lines | Description |
-|------|-------|-------------|
-| `pqchain.cpp` | ~120 | ZK circuit verifying EdDSA public key derivation and hash commitment |
-| `ed25519.cpp` | ~1,400 | Complete Ed25519 implementation: field emulation, point arithmetic, scalar multiplication |
-| `ed25519.h` | ~150 | Defines `ed25519`, `ed25519_emulated`, and `ed25519_point` structures |
-| `sha512.cpp` | ~100 | SHA-512 and HMAC-SHA-512 for RFC 8032 key derivation |
-| `sha512.h` | ~20 | SHA-512 function declarations |
+| File | Description |
+|------|-------------|
+| `pqchain.cpp` | ZK circuit verifying EdDSA public key derivation and hash commitment |
+| `ed25519.cpp` | Complete Ed25519 implementation: field emulation, point arithmetic, scalar multiplication |
+| `ed25519.h` | Defines `ed25519`, `ed25519_emulated`, and `ed25519_point` structures |
+| `sha512.cpp` | SHA-512 and HMAC-SHA-512 for RFC 8032 key derivation |
+| `sha512.h` | SHA-512 function declarations |
 
 ---
 
@@ -176,6 +185,7 @@ Install dependencies:
 ```bash
 brew install cmake gmp mpfr libomp llvm boost
 ```
+
 </details>
 
 <details>
@@ -238,6 +248,28 @@ Install OpenGL:
 ```bash
 sudo apt install mesa-common-dev libgl1-mesa-dev
 ```
+
+</details>
+
+<details>
+<summary><b>Install Emscripten</b></summary>
+
+Emscripten is required for building the WebAssembly version:
+
+```bash
+git clone https://github.com/emscripten-core/emsdk.git
+cd emsdk
+./emsdk install latest
+./emsdk activate latest
+source ./emsdk_env.sh
+```
+
+Add the following to your shell profile (e.g., `~/.bashrc` or `~/.zshrc`) for persistence:
+
+```bash
+source /path/to/emsdk/emsdk_env.sh
+```
+
 </details>
 
 ### Build WebGPU (Dawn)
@@ -276,9 +308,10 @@ git clone https://github.com/SoundnessLabs/pqchain.git
 cd pqchain
 ```
 
-### Build the native version of the Prover/Verifier
+### Build the Native Version of the Prover/Verifier
 
 From the project root directory:
+
 ```bash
 mkdir build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
@@ -287,36 +320,27 @@ make
 
 ### Build the C++ SDK (includes PQChain circuit)
 
-First, make sure Emscripten is installed and activated on your system. See [Install Emscripten](#install-emscripten) for more details.
+First, make sure Emscripten is installed and activated on your system. See [Install Emscripten](#install-emscripten) for details.
 
 Before we continue, it's important to understand how the web build works:
 - All dependencies must be built as WASM and installed to `<path-to-wasm-libs>`. To make life easier, we provide a repo that contains precompiled dependencies: [wasm-libs](https://github.com/ligeroinc/wasm-libs).
-- To avoid uploading the shader and application each time opening the page, we use Emscripten's preload feature. All contents in the `<build-directory>/pack` folder will be automatically bundled at compile time. (Remember to clear the cache after changing the contents since it won't trigger a recompile.)
+- To avoid uploading the shader and application each time you open the page, we use Emscripten's preload feature. All contents in the `<build-directory>/pack` folder will be automatically bundled at compile time. (Remember to clear the cache after changing the contents since it won't trigger a recompile.)
 - The target prover/verifier WASM will be embedded in an HTML shell (the default one is `emscripten_templates/edit_distance.html`). Depending on your needs, you can customize the shell to take a different number of inputs.
 
 From the project root directory:
-``` bash
+
+```bash
 mkdir -p build-web && cd build-web
-# build system will automatically create "pack" bundle subdirectory in the build directory,
-# and copy directory with webgpu shaders there
+# Build system will automatically create "pack" bundle subdirectory in the build directory,
+# and copy directory with WebGPU shaders there
 #
-# (Optional) If we need to copy the application wasm into the bundle:
+# (Optional) If you need to copy the application WASM into the bundle:
 mkdir pack             # Manually pre-create the preload bundle directory
-cp app.wasm pack/      # copy the application into the bundle directory
+cp app.wasm pack/      # Copy the application into the bundle directory
 #
 emcmake cmake -DCMAKE_BUILD_TYPE=Web -DCMAKE_PREFIX_PATH=<path-to-wasm-libs> ..
 emmake make
 ```
-
-**IMPORTANT**
-
-Although it's tempting to double-click and open the `webgpu_prover.html`, it won't work since the strict browser CORS rules prohibit loading other files from localhost. Use `emrun` or hosting a HTTP server instead:
-
-```bash
-emrun --browser chrome webgpu_prover.html
-```
-
-This produces `sdk/cpp/build/examples/pqchain.wasm`.
 
 ---
 
@@ -409,37 +433,44 @@ The verifier uses obscured (zeroed) private inputs:
 
 ---
 
-## Live Demo
+## Web Demonstration
 
-Try PQChain directly in your browser—no installation required.
+A fully functional browser-based demonstration is available for testing the client-side proof generation without installing dependencies.
 
-### **[Launch Demo →](https://soundness-pq-hub-qyf1.vercel.app/)**
+**Live Demo:** [https://PQChain.vercel.app/](https://PQChain.vercel.app/)
 
 ### Features
 
-- **100% Client-Side**: All proof generation happens in your browser via WebGPU
-- **Zero Data Transmission**: Private keys never leave your device
-- **Wallet Integration**: Connect Slush or Phantom wallets (TESTNET only)
-- **Real-Time Metrics**: Watch constraint generation and proving stages live
+- **Client-Side Proving**: All proof generation occurs in the browser using WebGPU
+- **No Server Interaction**: Private keys never leave your machine
+- **Wallet Integration**: Supports Slush and Phantom wallet connections (TESTNET only)
+- **Real-Time Benchmarks**: View detailed timing breakdown for each proving stage
 
-### Requirements
+### Browser Requirements
 
-- Chrome 113+ or Edge 113+ with WebGPU enabled
-- GPU with WebGPU/Vulkan/Metal support
-- 4GB+ VRAM recommended
+- Chrome 113+ or Edge 113+ with WebGPU support
+- GPU with WebGPU/Vulkan support
+- Minimum 4GB VRAM (8GB+ recommended)
 
-### Demo Workflow
+### Web Demo Workflow
 
-1. Navigate to the demo URL
-2. Accept the security disclaimer
-3. Connect a testnet wallet (Slush or Phantom)
-4. Scroll to "Proof Generation"
-5. Click "Generate Proof"
-6. View timing breakdown and proof output
+1. Navigate to [https://PQChain.vercel.app/](https://PQChain.vercel.app/)
+2. Accept the security disclaimer (this is a TESTNET demonstration only)
+3. Connect a Slush or Phantom wallet
+4. (Optional) Configure transaction details
+5. Scroll to "Proof Generation" section
+6. Click "Generate Proof"
+7. View the proof output and timing breakdown
 
-### Security Notice
+### Security Considerations for Web Demo
 
-> **This demo is for TESTNET only.** Never use mainnet wallets or real assets. Private keys are displayed for educational purposes. Create fresh test accounts and delete them after use.
+**Important Warnings:**
+
+- This is an **experimental proof-of-concept** for research purposes only
+- **TESTNET ONLY** — never use with mainnet or real assets
+- Private keys are displayed in the browser for demonstration purposes
+- Create fresh test accounts and delete them after testing
+- Do not reuse test keys for any other purpose
 
 ---
 
@@ -456,39 +487,30 @@ Try PQChain directly in your browser—no installation required.
 - Verify g++ 13 is installed: `g++ --version`
 - Set as default: `sudo update-alternatives --set g++ /usr/bin/g++-13`
 
-**WebGPU initialization fails**
-- Install/update GPU drivers
-- Verify Vulkan support: `vulkaninfo`
+**WebGPU/Dawn build failures**
+- Ensure you've checked out the correct Dawn commit
+- Try a clean build: `rm -rf release && mkdir release && cd release`
+
 </details>
 
 <details>
 <summary><b>Runtime Issues</b></summary>
 
-**Proof generation hangs**
-- Reduce packing size (try 4096)
-- Close other GPU-intensive applications
-
-**"Out of memory" error**
-- Use a smaller packing size
-- Ensure sufficient GPU VRAM (4GB+ recommended)
-
-**WebGPU not available in browser**
-- Use Chrome 113+ or Edge 113+
-- Enable at `chrome://flags/#enable-unsafe-webgpu`
-</details>
-
-<details>
-<summary><b>Verification Failures</b></summary>
+**CORS errors when opening HTML in browser**
+- Don't open the HTML file directly; use `emrun` or a local HTTP server
+- Example: `python3 -m http.server 8000` then navigate to `localhost:8000`
 
 **Proof verification fails**
-- Ensure public inputs match exactly between prover and verifier
-- Verify hash commitment: `hx = SHA-512(msg || seed)`
-- Check that private-indices match
+- Ensure the public inputs match between prover and verifier
+- Check that `private-indices` is correctly specified
+
 </details>
 
 ---
 
-### Development Setup
+## Contributing
+
+We welcome contributions! Please note that this project is still under active development.
 
 ```bash
 git clone https://github.com/SoundnessLabs/pqchain.git
@@ -519,16 +541,26 @@ limitations under the License.
 ```
 
 ---
+## Acknowledgements
+
+This implementation draws inspiration from several open-source projects:
+
+- [Electron-Labs/ed25519-circom](https://github.com/Electron-Labs/ed25519-circom) for non-native field emulation techniques
+- [Arkworks algebra](https://github.com/arkworks-rs/algebra) for Ed25519 curve constants
+- [LibTomCrypt](https://github.com/libtom/libtomcrypt) for SHA-512 primitives
+
+---
 
 ## About Soundness Labs
 
 <p align="center">
-  <a href="https://soundness.xyz">
-    <img src="https://framerusercontent.com/images/Dd9qT2d3jy0lfqDeIhP7vMLRic.png?scale-down-to=512&width=2531&height=616" alt="Soundness Labs" width="300">
+  <a href="https://soundness.xyz" target="_blank">
+    <img src="https://soundness-xyz.notion.site/image/attachment%3Aa4df3045-521c-41da-a0ef-ad89d7b2852e%3Abacf94a6-5284-4794-b5ec-5a8844affca7.png?table=block&id=262cb720-3e2b-80ee-af44-e4101aab1819&spaceId=2b0fa06f-b360-4628-a423-b7731e622496&width=1420&userId=&cache=v2" alt="Soundness Labs Logo" width="400">
   </a>
 </p>
 
-**[Soundness Labs](https://soundness.xyz)** is a post-quantum cryptography company focused on blockchain security infrastructure. We build quantum-ready solutions that protect digital assets against future cryptographic threats.
+**[Soundness Labs](https://soundness.xyz)** builds **quantum-ready cryptographic infrastructure** for blockchains, replacing fragile trust with verifiable security. We design post-quantum and zero-knowledge systems that protect digital assets today and keep them safe in a quantum future.
+
 
 ### Connect With Us
 
@@ -539,6 +571,6 @@ limitations under the License.
 ---
 
 <p align="center">
-  <b>Built by Soundness Labs</b><br>
-  <i>Towards building a Sound Internet</i>
+  <b>By Soundness Labs</b><br>
+  <i>Towards building a Sound Internet.</i>
 </p>
