@@ -148,6 +148,17 @@ static ed25519_point scalar_mul(const ed25519_point &p,
   // Precomputed generator multiples for windowed multiplication
   static const ed25519_point* get_generator_table();
 
+  // Oblivious point selection (constant-constraint-graph multiplexers)
+  // out = cond ? b1 : b0  (cond must be 0 or 1 as a bn254fr_class)
+  static ed25519_point mux(bn254fr_class &cond,
+                           ed25519_point &b0, ed25519_point &b1);
+
+  // 2-bit oblivious lookup: out = table[s1*2 + s0]
+  // s0, s1 must be 0 or 1 as bn254fr_class
+  static ed25519_point mux2(bn254fr_class &s0, bn254fr_class &s1,
+                            ed25519_point &b0, ed25519_point &b1,
+                            ed25519_point &b2, ed25519_point &b3);
+
   void to_affine(ed25519_emulated &affine_x, ed25519_emulated &affine_y) const;
 
   void debug_print(const char *label = nullptr) const;
