@@ -1284,90 +1284,117 @@ ed25519_point ed25519_point::point_negate(const ed25519_point &p) {
   return result;
 }
 
-ed25519_point ed25519_point::scalar_mul(const ed25519_point &p,
-                                        const ed25519 &scalar) {
-  ed25519_emulated scalar_emul = ed25519_emulated::to_emulated(scalar);
-  int max_idx = 255;
-  // 4-bit fixed-window scalar multiplication with simple per-call precompute
-  // Table size: 16 (0..15), store multiples of p: [1P,2P,...,15P], 0 unused
-  ed25519_point table[16];
-  table[0] = ed25519_point::zero();
-  table[1] = p;
-  for (int i = 2; i < 16; ++i) {
-    if ((i & 1) == 0) {
-      // table[i] = ed25519_point::point_add(table[i >> 1], table[i >> 1]);
-      table[i] = ed25519_point::point_double(table[i >> 1]);
-    } else {
-      table[i] = ed25519_point::point_add(table[i - 1], p);
-    }
-  }
 
-  // Extract scalar bits LSB-first into 255-bit array
-  bool bits[max_idx];
-  for (int bit_idx = 0; bit_idx < max_idx; ++bit_idx) {
+
+// Helper: oblivious 2-to-1 mux on an ed25519_emulated value
+static void mux_emulated(ed25519_emulated &out, bn254fr_class &cond,
+                         ed25519_emulated &a0, ed25519_emulated &a1) {
+  for (size_t i = 0; i < ed25519_emulated::NUM_LIMBS; ++i) {
+    ligetron::mux(out.limbs[i], cond, a0.limbs[i], a1.limbs[i]);
+  }
+  out.num_additions = 0;
+  out.is_normalized = false;
+}
+
+// Helper: oblivious 4-to-1 mux on an ed25519_emulated value (2-bit selector)
+static void mux2_emulated(ed25519_emulated &out,
+                          bn254fr_class &s0, bn254fr_class &s1,
+                          ed25519_emulated &a0, ed25519_emulated &a1,
+                          ed25519_emulated &a2, ed25519_emulated &a3) {
+  for (size_t i = 0; i < ed25519_emulated::NUM_LIMBS; ++i) {
+    ligetron::mux2(out.limbs[i], s0, s1,
+                   a0.limbs[i], a1.limbs[i],
+                   a2.limbs[i], a3.limbs[i]);
+  }
+  out.num_additions = 0;
+  out.is_normalized = false;
+}
+
+ed25519_point ed25519_point::mux(bn254fr_class &cond,
+                                 ed25519_point &b0, ed25519_point &b1) {
+  ed25519_point r;
+  mux_emulated(r.x, cond, b0.x, b1.x);
+  mux_emulated(r.y, cond, b0.y, b1.y);
+  mux_emulated(r.z, cond, b0.z, b1.z);
+  mux_emulated(r.t, cond, b0.t, b1.t);
+  return r;
+}
+
+ed25519_point ed25519_point::mux2(bn254fr_class &s0, bn254fr_class &s1,
+                                  ed25519_point &b0, ed25519_point &b1,
+                                  ed25519_point &b2, ed25519_point &b3) {
+  ed25519_point r;
+  mux2_emulated(r.x, s0, s1, b0.x, b1.x, b2.x, b3.x);
+  mux2_emulated(r.y, s0, s1, b0.y, b1.y, b2.y, b3.y);
+  mux2_emulated(r.z, s0, s1, b0.z, b1.z, b2.z, b3.z);
+  mux2_emulated(r.t, s0, s1, b0.t, b1.t, b2.t, b3.t);
+  return r;
+}
+
+
+static void extract_scalar_bits_zk(bn254fr_class bits[255],
+                                   const ed25519 &scalar) {
+  ed25519_emulated scalar_emul = ed25519_emulated::to_emulated(scalar);
+  for (int bit_idx = 0; bit_idx < 255; ++bit_idx) {
     int limb_idx = 2 - (bit_idx / 85);
     int bit_in_limb = bit_idx % 85;
-    bits[bit_idx] = false;
     if (limb_idx >= 0 && limb_idx < 3) {
-      bn254fr_class limb_value = scalar_emul.limbs[limb_idx];
       bn254fr_class bit_array[85];
-      limb_value.to_bits(bit_array, 85);
-      bits[bit_idx] = (bit_array[bit_in_limb].get_u64() & 1) != 0;
+      scalar_emul.limbs[limb_idx].to_bits(bit_array, 85);
+      bits[bit_idx] = bit_array[bit_in_limb]; // stays as bn254fr_class!
+    } else {
+      bits[bit_idx] = bn254fr_class(0);
     }
   }
+}
 
-  ed25519_point acc = ed25519_point::zero();
-  // Process from MSB window to LSB window: windows of 4 bits
-  for (int w = ((max_idx + 3) / 4) - 1; w >= 0; --w) {
-    // 4 doublings between windows
-    for (int d = 0; d < 4; ++d) {
-      // acc = ed25519_point::point_add(acc, acc);
-      acc = ed25519_point::point_double(acc);
-    }
-    // Gather window value (LSB-first bits array)
-    int start_bit = w * 4;
-    int val = 0;
-    for (int b = 3; b >= 0; --b) {
-      val <<= 1;
-      int idx = start_bit + b;
-      if (idx < max_idx && bits[idx])
-        val |= 1;
-    }
-    if (val != 0) {
-      acc = ed25519_point::point_add(acc, table[val]);
-    }
+
+ed25519_point ed25519_point::scalar_mul(const ed25519_point &p,
+                                        const ed25519 &scalar) {
+  // Extract scalar bits as ZK field elements (NOT native bools)
+  bn254fr_class bits[255];
+  extract_scalar_bits_zk(bits, scalar);
+
+  // Precompute: w0=O, w1=P, w2=2P, w3=3P for 2-bit window oblivious lookup
+  ed25519_point w0 = ed25519_point::zero();
+  ed25519_point w1 = p;
+  ed25519_point w2 = ed25519_point::point_double(p);
+  ed25519_point w3 = ed25519_point::point_add(w1, w2);
+
+  // Handle the top bit (bit 254) — single-bit window via oblivious mux
+  ed25519_point acc = ed25519_point::mux(bits[254], w0, w1);
+
+  // Process remaining 254 bits in 2-bit windows from MSB to LSB
+  // Windows: (253,252), (251,250), ..., (1,0)
+  for (int i = 252; i >= 0; i -= 2) {
+    acc = ed25519_point::point_double(acc);
+    acc = ed25519_point::point_double(acc);
+
+    // Oblivious table lookup — constraint graph is identical for all scalars
+    ed25519_point temp = ed25519_point::mux2(bits[i], bits[i + 1],
+                                             w0, w1, w2, w3);
+    acc = ed25519_point::point_add(acc, temp);
   }
 
   return acc;
 }
 
-// Precomputed generator multiples for 5-bit windowed multiplication
-// Table contains [G, 2G, 3G, ..., 31G] for 5-bit windows
-static ed25519_point generator_table[32];
+// Precomputed generator multiples for windowed multiplication
+// Table contains [0, G, 2G, 3G] for 2-bit windows
+static ed25519_point generator_table[4];
 static bool generator_table_initialized = false;
 
 void initialize_generator_table() {
   if (generator_table_initialized) return;
-  
+
   ed25519_point G = ed25519_point::generator();
-  
-  // Initialize table[0] as zero point
+
   generator_table[0] = ed25519_point::zero();
-  
-  // Initialize table[1] as generator
   generator_table[1] = G;
-  
-  // Compute multiples using efficient doubling and addition
-  for (int i = 2; i < 32; ++i) {
-    if ((i & 1) == 0) {
-      // Even index: double the half-index point
-      generator_table[i] = ed25519_point::point_double(generator_table[i >> 1]);
-    } else {
-      // Odd index: add G to the previous point
-      generator_table[i] = ed25519_point::point_add(generator_table[i - 1], G);
-    }
-  }
-  
+  generator_table[2] = ed25519_point::point_double(G);
+  generator_table[3] = ed25519_point::point_add(generator_table[1],
+                                                  generator_table[2]);
+
   generator_table_initialized = true;
 }
 
@@ -1376,90 +1403,56 @@ const ed25519_point* ed25519_point::get_generator_table() {
   return generator_table;
 }
 
-// Optimized scalar multiplication specifically for generator point
+// Oblivious generator scalar multiplication (2-bit windowed, same pattern)
 ed25519_point ed25519_point::scalar_mul_generator(const ed25519 &scalar) {
   initialize_generator_table();
-  
-  ed25519_emulated scalar_emul = ed25519_emulated::to_emulated(scalar);
-  
-  // Extract scalar bits LSB-first
-  bool bits[255];
-  for (int bit_idx = 0; bit_idx < 255; ++bit_idx) {
-    int limb_idx = 2 - (bit_idx / 85);
-    int bit_in_limb = bit_idx % 85;
-    bits[bit_idx] = false;
-    if (limb_idx >= 0 && limb_idx < 3) {
-      bn254fr_class limb_value = scalar_emul.limbs[limb_idx];
-      bn254fr_class bit_array[85];
-      limb_value.to_bits(bit_array, 85);
-      bits[bit_idx] = (bit_array[bit_in_limb].get_u64() & 1) != 0;
-    }
+
+  bn254fr_class bits[255];
+  extract_scalar_bits_zk(bits, scalar);
+
+  ed25519_point w0 = generator_table[0];
+  ed25519_point w1 = generator_table[1];
+  ed25519_point w2 = generator_table[2];
+  ed25519_point w3 = generator_table[3];
+
+  // Top bit
+  ed25519_point acc = ed25519_point::mux(bits[254], w0, w1);
+
+  for (int i = 252; i >= 0; i -= 2) {
+    acc = ed25519_point::point_double(acc);
+    acc = ed25519_point::point_double(acc);
+
+    ed25519_point temp = ed25519_point::mux2(bits[i], bits[i + 1],
+                                             w0, w1, w2, w3);
+    acc = ed25519_point::point_add(acc, temp);
   }
-  
-  ed25519_point acc = ed25519_point::zero();
-  
-  // 5-bit windowed multiplication (more efficient than 4-bit)
-  for (int w = 50; w >= 0; --w) { // 255 bits / 5 bits = 51 windows
-    // 5 doublings between windows
-    for (int d = 0; d < 5; ++d) {
-      acc = ed25519_point::point_double(acc);
-    }
-    
-    // Gather 5-bit window value
-    int start_bit = w * 5;
-    int val = 0;
-    for (int b = 4; b >= 0; --b) {
-      val <<= 1;
-      int idx = start_bit + b;
-      if (idx < 255 && bits[idx]) {
-        val |= 1;
-      }
-    }
-    
-    if (val != 0) {
-      acc = ed25519_point::point_add(acc, generator_table[val]);
-    }
-  }
-  
+
   return acc;
 }
 
-// Montgomery ladder for constant-time scalar multiplication
+// Oblivious Montgomery ladder scalar multiplication
+// Both branches (bit=0 and bit=1) are computed unconditionally; the correct
+// result is selected via oblivious mux, keeping the constraint graph fixed.
 ed25519_point ed25519_point::scalar_mul_montgomery(const ed25519_point &p,
                                                    const ed25519 &scalar) {
-  ed25519_emulated scalar_emul = ed25519_emulated::to_emulated(scalar);
-  
-  // Extract scalar bits LSB-first
-  bool bits[255];
-  for (int bit_idx = 0; bit_idx < 255; ++bit_idx) {
-    int limb_idx = 2 - (bit_idx / 85);
-    int bit_in_limb = bit_idx % 85;
-    bits[bit_idx] = false;
-    if (limb_idx >= 0 && limb_idx < 3) {
-      bn254fr_class limb_value = scalar_emul.limbs[limb_idx];
-      bn254fr_class bit_array[85];
-      limb_value.to_bits(bit_array, 85);
-      bits[bit_idx] = (bit_array[bit_in_limb].get_u64() & 1) != 0;
-    }
-  }
-  
-  // Montgomery ladder: R0 = O (infinity), R1 = P
+  bn254fr_class bits[255];
+  extract_scalar_bits_zk(bits, scalar);
+
   ed25519_point R0 = ed25519_point::zero();
   ed25519_point R1 = p;
-  
-  // Process bits from MSB to LSB for constant-time behavior
+
   for (int i = 254; i >= 0; --i) {
-    if (bits[i]) {
-      // bit is 1: R0 = R0 + R1, R1 = 2*R1
-      R0 = ed25519_point::point_add(R0, R1);
-      R1 = ed25519_point::point_double(R1);
-    } else {
-      // bit is 0: R1 = R0 + R1, R0 = 2*R0
-      R1 = ed25519_point::point_add(R0, R1);
-      R0 = ed25519_point::point_double(R0);
-    }
+    // Compute BOTH branches unconditionally
+    ed25519_point sum = ed25519_point::point_add(R0, R1);
+    ed25519_point dbl_R0 = ed25519_point::point_double(R0);
+    ed25519_point dbl_R1 = ed25519_point::point_double(R1);
+
+    // Oblivious selection: bit=0 → (R0=2*R0, R1=R0+R1)
+    //                      bit=1 → (R0=R0+R1, R1=2*R1)
+    R0 = ed25519_point::mux(bits[i], dbl_R0, sum);
+    R1 = ed25519_point::mux(bits[i], sum, dbl_R1);
   }
-  
+
   return R0;
 }
 
